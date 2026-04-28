@@ -305,241 +305,467 @@ with st.sidebar:
 # ── Main ──────────────────────────────────────────────────────────────────────
 st.markdown("## 🌏 Synthetic Twin City Finder")
 
-st.markdown(
-    '<div class="info-box">'
-    "<b>What is a Synthetic Twin?</b> A market whose consumer demand profile closely "
-    "mirrors your target market — making it an ideal <em>control group</em> for a "
-    "geo-lift / incrementality test. High correlation (r ≥ 0.80) = strong candidate."
-    "</div>",
-    unsafe_allow_html=True,
-)
+# ── Top-level tabs ────────────────────────────────────────────────────────────
+tab_finder, tab_exec = st.tabs(["🔍 Twin Finder", "⚡ Incrementality Execution"])
 
-st.markdown(
-    '<div class="method-box">'
-    "<b>📐 Methodology:</b> This tool fetches Google Trends <em>interest by region</em> "
-    "scores for each keyword you select, builds a keyword × market demand matrix, "
-    "normalises it, and computes <b>Pearson correlation</b> between your target market "
-    "and each comparison market. Comparing across multiple keywords captures broader "
-    "consumer behaviour patterns — more robust than a single time-series comparison."
-    "</div>",
-    unsafe_allow_html=True,
-)
-
-if not run_btn:
+# ═══════════════════════════════════════════════════════════════════════════════
+# TAB 2 — INCREMENTALITY EXECUTION (defined first so it's always visible)
+# ═══════════════════════════════════════════════════════════════════════════════
+with tab_exec:
+    st.markdown("### ⚡ The 4-Step Incrementality Execution Playbook")
     st.markdown(
-        '<div class="warn-box">👈 Configure your inputs in the sidebar and click '
-        "<b>Find Synthetic Twin</b> to begin.</div>",
+        '<div class="info-box">'
+        "<b>What is Incrementality?</b> It answers the question: <em>'Would these conversions "
+        "have happened anyway — even without our ads?'</em> A geo-lift test uses your "
+        "Synthetic Twin as a <b>counterfactual</b> — what the Target market would have done "
+        "without the media intervention. The difference is your true, incremental impact."
+        "</div>",
         unsafe_allow_html=True,
     )
-    st.stop()
 
-# ── Validation ────────────────────────────────────────────────────────────────
-if not comparison_markets:
-    st.error("Please select at least one Comparison Market.")
-    st.stop()
-if not keywords:
-    st.error("Please select or enter at least one keyword.")
-    st.stop()
+    # ── Timeline visual ───────────────────────────────────────────────────────
+    st.markdown('<p class="section-header">📅 Test Timeline Overview</p>', unsafe_allow_html=True)
 
-# ── Fetch ─────────────────────────────────────────────────────────────────────
-st.markdown('<p class="section-header">📡 Fetching Google Trends Data</p>', unsafe_allow_html=True)
-progress_bar = st.progress(0)
-status_text  = st.empty()
-
-score_matrix = fetch_all_keywords(keywords, timeframe, progress_bar, status_text)
-
-if score_matrix.empty:
-    st.error(
-        "No data returned from Google Trends.\n\n"
-        "**Possible causes:**\n"
-        "- All keywords returned empty responses (try broader terms)\n"
-        "- Google Trends rate limit — wait 60 s and retry\n"
-    )
-    st.stop()
-
-# ── Check markets ─────────────────────────────────────────────────────────────
-available_markets = [m for m in score_matrix.columns if m in [target_market] + comparison_markets]
-missing_markets   = [m for m in [target_market] + comparison_markets if m not in score_matrix.columns]
-
-if missing_markets:
-    st.warning(f"⚠️ No search data for: **{', '.join(missing_markets)}** — excluded from analysis.")
-
-if target_market not in score_matrix.columns:
-    st.error(
-        f"Target market **{target_market}** has no Google Trends data for the selected keywords. "
-        "Try different keywords or a broader timeframe."
-    )
-    st.stop()
-
-comp_available = [m for m in comparison_markets if m in score_matrix.columns]
-if not comp_available:
-    st.error("None of the comparison markets have data. Try different markets or keywords.")
-    st.stop()
-
-# ── Correlations ──────────────────────────────────────────────────────────────
-corr_df  = compute_correlations(score_matrix, target_market, comp_available)
-valid    = corr_df.dropna(subset=["Correlation (r)"])
-
-if valid.empty:
-    st.error("Could not compute correlations — insufficient data. Try adding more keywords.")
-    st.stop()
-
-best_row   = valid.iloc[0]
-twin       = best_row["Market"]
-twin_r     = best_row["Correlation (r)"]
-twin_score = best_row["Match Score (%)"]
-
-# ── KPI row ───────────────────────────────────────────────────────────────────
-st.markdown('<p class="section-header">📊 Summary</p>', unsafe_allow_html=True)
-c1, c2, c3, c4, c5 = st.columns(5)
-c1.metric("🎯 Target Market",   target_market)
-c2.metric("🏆 Synthetic Twin",  twin)
-c3.metric("📈 Correlation (r)", f"{twin_r:.4f}")
-c4.metric("🎯 Match Score",     f"{twin_score}%")
-c5.metric("🔍 Keywords Used",   f"{len(score_matrix)}")
-
-st.markdown(
-    f'<div style="text-align:center;margin:1.5rem 0;">'
-    f'<div class="twin-badge">🏆 Synthetic Twin: {twin} &nbsp;|&nbsp; Match Score: {twin_score}%</div>'
-    f"</div>",
-    unsafe_allow_html=True,
-)
-
-# ── Radar / Spider chart: demand profile comparison ───────────────────────────
-st.markdown('<p class="section-header">🕸️ Demand Profile — Target vs Synthetic Twin</p>', unsafe_allow_html=True)
-
-norm_matrix = score_matrix.apply(normalize_row, axis=1)
-kw_labels   = list(norm_matrix.index)
-
-if target_market in norm_matrix.columns and twin in norm_matrix.columns:
-    target_vals = norm_matrix[target_market].fillna(0).tolist()
-    twin_vals   = norm_matrix[twin].fillna(0).tolist()
-
-    fig_radar = go.Figure()
-    fig_radar.add_trace(go.Scatterpolar(
-        r=target_vals + [target_vals[0]],
-        theta=kw_labels + [kw_labels[0]],
-        fill="toself",
-        name=f"🎯 {target_market} (Target)",
-        line=dict(color="#1877F2", width=2.5),
-        fillcolor="rgba(24,119,242,0.15)",
-    ))
-    fig_radar.add_trace(go.Scatterpolar(
-        r=twin_vals + [twin_vals[0]],
-        theta=kw_labels + [kw_labels[0]],
-        fill="toself",
-        name=f"🏆 {twin} (Twin)",
-        line=dict(color="#F5A623", width=2.5, dash="dot"),
-        fillcolor="rgba(245,166,35,0.15)",
-    ))
-    fig_radar.update_layout(
-        polar=dict(
-            radialaxis=dict(visible=True, range=[0, 1], tickfont=dict(size=10)),
-            angularaxis=dict(tickfont=dict(size=12)),
-        ),
-        legend=dict(orientation="h", yanchor="bottom", y=-0.2, xanchor="center", x=0.5),
-        paper_bgcolor="#FFFFFF",
-        plot_bgcolor="#FFFFFF",
-        height=420,
-        margin=dict(l=40, r=40, t=40, b=60),
-    )
-    st.plotly_chart(fig_radar, use_container_width=True)
-
-# ── Heatmap: all markets × keywords ──────────────────────────────────────────
-with st.expander("🗺️ Full Demand Heatmap — All Markets × Keywords"):
-    all_markets_in_matrix = [target_market] + [m for m in comp_available if m != target_market]
-    heat_data = norm_matrix[
-        [m for m in all_markets_in_matrix if m in norm_matrix.columns]
-    ].fillna(0)
-
-    fig_heat = go.Figure(go.Heatmap(
-        z=heat_data.values,
-        x=list(heat_data.columns),
-        y=list(heat_data.index),
-        colorscale="Blues",
-        text=np.round(heat_data.values, 2),
-        texttemplate="%{text}",
-        hovertemplate="<b>%{y}</b> in <b>%{x}</b><br>Normalised score: %{z:.2f}<extra></extra>",
-        colorbar=dict(title="Score"),
-    ))
-    fig_heat.update_layout(
-        plot_bgcolor="#FFFFFF", paper_bgcolor="#FFFFFF",
-        font=dict(family="Segoe UI, Helvetica, Arial", size=12),
-        xaxis=dict(title="Market", tickangle=-30),
-        yaxis=dict(title="Keyword"),
-        height=max(300, len(kw_labels) * 60 + 100),
-        margin=dict(l=20, r=20, t=30, b=60),
-    )
-    st.plotly_chart(fig_heat, use_container_width=True)
-
-# ── Bar chart: Match Scores ───────────────────────────────────────────────────
-st.markdown('<p class="section-header">🏅 Match Score by Market</p>', unsafe_allow_html=True)
-valid_corr = corr_df.dropna(subset=["Match Score (%)"])
-if not valid_corr.empty:
-    bar_colors = [
-        "#1877F2" if m == twin else
-        ("#42A5F5" if s >= 80 else ("#FFC107" if s >= 50 else "#EF5350"))
-        for m, s in zip(valid_corr["Market"], valid_corr["Match Score (%)"])
+    timeline_fig = go.Figure()
+    phases_data = [
+        ("Pre-Test / Calibration", 0, 14, "#1877F2", "14 days — Run ads as usual in both markets. Validate R² ≥ 0.80."),
+        ("Treatment Period", 14, 44, "#E74C3C", "21–30 days — Blackout or Heavy-Up in Target. Twin stays BAU."),
+        ("Analysis Window", 44, 51, "#27AE60", "7 days — Measure gap, compute lift, validate significance."),
     ]
-    fig_bar = go.Figure(go.Bar(
-        x=valid_corr["Market"], y=valid_corr["Match Score (%)"],
-        marker_color=bar_colors,
-        text=[f"{s}%" for s in valid_corr["Match Score (%)"]],
-        textposition="outside",
-        hovertemplate="<b>%{x}</b><br>Match Score: %{y}%<extra></extra>",
-    ))
-    fig_bar.add_hline(y=80, line_dash="dash", line_color="#28A745",
-                      annotation_text="Strong (80%)", annotation_position="top right")
-    fig_bar.add_hline(y=50, line_dash="dash", line_color="#FFC107",
-                      annotation_text="Moderate (50%)", annotation_position="top right")
-    fig_bar.update_layout(
-        plot_bgcolor="#FFFFFF", paper_bgcolor="#FFFFFF",
-        font=dict(family="Segoe UI, Helvetica, Arial", size=13, color="#1C1E21"),
-        xaxis=dict(title="Market", showgrid=False),
-        yaxis=dict(title="Match Score (%)", range=[0, 115],
-                   showgrid=True, gridcolor="#E4E6EB"),
-        height=380, margin=dict(l=20, r=20, t=30, b=20),
+    for name, start, end, color, note in phases_data:
+        timeline_fig.add_trace(go.Bar(
+            name=name, x=[end - start], y=["Test Timeline"],
+            base=[start], orientation="h",
+            marker_color=color, marker_line_width=0,
+            hovertemplate=f"<b>{name}</b><br>Day {start}–{end}<br>{note}<extra></extra>",
+            text=name, textposition="inside",
+        ))
+    timeline_fig.add_vline(x=14, line_dash="dash", line_color="#555", annotation_text="Test Start", annotation_position="top")
+    timeline_fig.add_vline(x=44, line_dash="dash", line_color="#555", annotation_text="Test End", annotation_position="top")
+    timeline_fig.update_layout(
+        barmode="stack", height=140, margin=dict(l=10, r=10, t=40, b=10),
+        xaxis=dict(title="Day", range=[0, 55], tickvals=list(range(0, 56, 7))),
+        yaxis=dict(visible=False), showlegend=True,
+        legend=dict(orientation="h", yanchor="bottom", y=1.1, xanchor="left", x=0),
+        plot_bgcolor="#F8F9FA", paper_bgcolor="#F8F9FA",
     )
-    st.plotly_chart(fig_bar, use_container_width=True)
+    st.plotly_chart(timeline_fig, use_container_width=True)
 
-# ── Ranking table ─────────────────────────────────────────────────────────────
-st.markdown('<p class="section-header">📋 Control Market Ranking — Geo-Lift Suitability</p>', unsafe_allow_html=True)
+    # ── Step cards ────────────────────────────────────────────────────────────
+    st.markdown('<p class="section-header">🪜 The 4 Steps</p>', unsafe_allow_html=True)
 
-styled = (
-    corr_df.style
-    .map(score_color, subset=["Match Score (%)"])
-    .format({
-        "Correlation (r)": lambda x: f"{x:.4f}" if pd.notna(x) else "—",
-        "Match Score (%)": lambda x: f"{x}%" if pd.notna(x) else "—",
-    })
-    .set_properties(**{"text-align": "center"})
-    .set_table_styles([
-        {"selector": "thead th",
-         "props": [("background-color", "#1877F2"), ("color", "white"),
-                   ("font-weight", "bold"), ("text-align", "center")]},
-        {"selector": "tbody tr:nth-child(1)",
-         "props": [("background-color", "#E7F3FF")]},
-    ])
-)
-st.dataframe(styled, use_container_width=True)
+    step_cols = st.columns(2)
 
-# ── Keyword score table ───────────────────────────────────────────────────────
-with st.expander("📊 Raw Keyword Interest Scores by Market"):
-    all_mkt_cols = [target_market] + comp_available
-    raw_sub = score_matrix[[m for m in all_mkt_cols if m in score_matrix.columns]]
-    def _blue_scale(val):
-        try:
-            v = float(val)
-            intensity = int(200 - v * 1.5)  # 0→200, 100→50
-            intensity = max(50, min(200, intensity))
-            return f"background-color: rgb({intensity},{intensity + 20},255); color: {'black' if intensity > 120 else 'white'}"
-        except Exception:
-            return ""
-    st.dataframe(raw_sub.style.map(_blue_scale), use_container_width=True)
+    with step_cols[0]:
+        st.markdown("""
+        <div style="background:#E7F3FF;border-left:5px solid #1877F2;border-radius:8px;padding:16px 18px;margin-bottom:16px">
+        <b style="font-size:1.05rem;color:#1877F2">Step 1 — Calibration Period (Pre-Test)</b><br><br>
+        <b>Duration:</b> 14 days minimum<br>
+        <b>Action:</b> Run ads as usual in <em>both</em> Target and Twin markets — no changes.<br>
+        <b>Goal:</b> Confirm that both markets move in lockstep. If they diverge here, your Twin is invalid — find a new one.<br><br>
+        <b>Pass / Fail metric:</b><br>
+        ✅ R² ≥ 0.80 → Twin is valid, proceed<br>
+        ❌ R² &lt; 0.80 → Return to Twin Finder, try different keywords or markets
+        </div>
+        """, unsafe_allow_html=True)
 
-# ── Interpretation guide ──────────────────────────────────────────────────────
-st.markdown('<p class="section-header">📖 How to Interpret Results</p>', unsafe_allow_html=True)
-st.markdown("""
+        st.markdown("""
+        <div style="background:#FFF0F0;border-left:5px solid #E74C3C;border-radius:8px;padding:16px 18px;margin-bottom:16px">
+        <b style="font-size:1.05rem;color:#E74C3C">Step 2 — The Treatment (Test Period)</b><br><br>
+        <b>Duration:</b> 21–30 days (covers a full purchase cycle)<br><br>
+        <b>Option A — Blackout (Recommended):</b><br>
+        Turn off all spend in the <b>Target</b> market. Keep Twin at BAU.<br>
+        Measures: <em>"What did we lose by not advertising?"</em><br><br>
+        <b>Option B — Heavy-Up:</b><br>
+        Double spend in the <b>Target</b> market. Keep Twin stable.<br>
+        Measures: <em>"What did we gain by spending more?"</em><br><br>
+        ⚠️ <b>Critical rule:</b> The Twin market must receive <em>zero</em> test-related changes during this window.
+        </div>
+        """, unsafe_allow_html=True)
+
+    with step_cols[1]:
+        st.markdown("""
+        <div style="background:#F0FFF4;border-left:5px solid #27AE60;border-radius:8px;padding:16px 18px;margin-bottom:16px">
+        <b style="font-size:1.05rem;color:#27AE60">Step 3 — Data Collection (The Gap)</b><br><br>
+        <b>What you're watching:</b> A divergence opening between the two markets.<br><br>
+        • <b>Target City</b> → shows actual outcome (with or without ads)<br>
+        • <b>Twin City</b> → acts as the <em>counterfactual</em> (what would have happened anyway)<br><br>
+        <b>Key signals to monitor:</b><br>
+        — Conversion rate delta (Target vs Twin)<br>
+        — Search volume trends (Google Trends)<br>
+        — Any external shocks (holidays, news, competitor activity) that could contaminate the Twin<br><br>
+        📌 <b>Contamination check:</b> If the Twin market is accidentally exposed to your ads (e.g. via social sharing, cross-border reach), the test is compromised.
+        </div>
+        """, unsafe_allow_html=True)
+
+        st.markdown("""
+        <div style="background:#FFFBF0;border-left:5px solid #F39C12;border-radius:8px;padding:16px 18px;margin-bottom:16px">
+        <b style="font-size:1.05rem;color:#E67E22">Step 4 — The Lift Calculation</b><br><br>
+        <b>The formula:</b><br>
+        <code>Incremental Lift = Actual (Target) − Predicted (based on Twin)</code><br><br>
+        <b>Incrementality % =</b><br>
+        <code>(Actual − Predicted) / Predicted × 100</code><br><br>
+        <b>Example (Blackout test):</b><br>
+        — Actual sales in Target (ads off): $10,000<br>
+        — Predicted sales based on Twin: $15,000<br>
+        — <b>Incremental value of ads: $5,000</b><br>
+        — <b>Incrementality: 33%</b> → ads drove 1-in-3 sales<br><br>
+        📌 Use CausalImpact or a pre/post regression model for statistical significance.
+        </div>
+        """, unsafe_allow_html=True)
+
+    # ── Lift calculator ───────────────────────────────────────────────────────
+    st.markdown('<p class="section-header">🧮 Incremental Lift Calculator</p>', unsafe_allow_html=True)
+    st.markdown("Enter your test results to compute incremental lift and iROAS.")
+
+    calc_cols = st.columns(3)
+    with calc_cols[0]:
+        actual_val   = st.number_input("Actual result (Target market)", min_value=0.0, value=10000.0, step=100.0, format="%.0f",
+                                       help="e.g. sales, conversions, or revenue during the test period")
+        test_type    = st.selectbox("Test type", ["Blackout (ads off in Target)", "Heavy-Up (ads increased in Target)"])
+    with calc_cols[1]:
+        predicted_val = st.number_input("Predicted result (from Twin)", min_value=0.0, value=15000.0, step=100.0, format="%.0f",
+                                        help="What the Target market would have done, based on Twin's trajectory")
+        media_spend   = st.number_input("Media spend during test ($)", min_value=0.0, value=5000.0, step=100.0, format="%.0f")
+    with calc_cols[2]:
+        metric_label = st.text_input("Metric label", value="Revenue ($)", help="e.g. Revenue, Conversions, Sign-ups")
+        confidence   = st.slider("Confidence threshold (%)", 80, 99, 90)
+
+    if predicted_val > 0:
+        lift_abs  = actual_val - predicted_val
+        lift_pct  = lift_abs / predicted_val * 100
+        iroas     = lift_abs / media_spend if media_spend > 0 else 0
+        cpi       = media_spend / abs(lift_abs) if lift_abs != 0 else 0  # cost per incremental unit
+
+        is_blackout = "Blackout" in test_type
+        # For blackout: negative lift_abs means ads helped (we lost revenue by turning off)
+        incremental = -lift_abs if is_blackout else lift_abs
+        incremental_pct = -lift_pct if is_blackout else lift_pct
+
+        res_cols = st.columns(4)
+        def _metric_card(col, label, value, delta_label, positive_good=True):
+            col.metric(label, value, delta_label)
+
+        with res_cols[0]:
+            st.metric(
+                "Incremental " + metric_label,
+                f"{incremental:+,.0f}",
+                delta=f"{incremental_pct:+.1f}% vs counterfactual",
+                delta_color="normal" if incremental >= 0 else "inverse"
+            )
+        with res_cols[1]:
+            st.metric("iROAS", f"{iroas:.2f}x" if media_spend > 0 else "N/A",
+                      help="Incremental Return on Ad Spend = Incremental Value / Media Spend")
+        with res_cols[2]:
+            st.metric("Cost per Incremental Unit", f"${cpi:,.2f}" if lift_abs != 0 else "N/A",
+                      help="Media spend divided by absolute incremental units")
+        with res_cols[3]:
+            verdict = "✅ Ads drove lift" if incremental > 0 else "❌ No measurable lift"
+            st.metric("Verdict", verdict)
+
+        # Waterfall chart
+        wf_fig = go.Figure(go.Waterfall(
+            name="Lift Breakdown",
+            orientation="v",
+            measure=["absolute", "relative", "total"],
+            x=["Predicted (Twin)", "Incremental Lift", "Actual (Target)"],
+            y=[predicted_val, incremental, 0],
+            connector={"line": {"color": "#CCC"}},
+            decreasing={"marker": {"color": "#E74C3C"}},
+            increasing={"marker": {"color": "#27AE60"}},
+            totals={"marker": {"color": "#1877F2"}},
+            text=[f"{predicted_val:,.0f}", f"{incremental:+,.0f}", f"{actual_val:,.0f}"],
+            textposition="outside",
+        ))
+        wf_fig.update_layout(
+            title=f"Lift Waterfall — {metric_label}",
+            height=380, margin=dict(l=20, r=20, t=50, b=20),
+            plot_bgcolor="#F8F9FA", paper_bgcolor="#F8F9FA",
+            yaxis_title=metric_label,
+        )
+        st.plotly_chart(wf_fig, use_container_width=True)
+    else:
+        st.info("Enter a Predicted value > 0 to compute lift.")
+
+    # ── Decision framework ────────────────────────────────────────────────────
+    st.markdown('<p class="section-header">🚦 Decision Framework</p>', unsafe_allow_html=True)
+    st.markdown("""
+| Signal | Threshold | Action |
+|---|---|---|
+| Pre-test R² | ≥ 0.80 | ✅ Proceed to test |
+| Pre-test R² | 0.60–0.79 | ⚠️ Extend calibration to 21 days |
+| Pre-test R² | < 0.60 | ❌ Find a new Twin |
+| Incrementality % | ≥ 20% | ✅ Ads are driving real lift — scale |
+| Incrementality % | 5–19% | ⚠️ Marginal — optimise creative/audience |
+| Incrementality % | < 5% | ❌ Ads not incremental — pause and re-evaluate |
+| iROAS | ≥ 2.0x | ✅ Efficient — maintain or increase spend |
+| iROAS | 1.0–1.9x | ⚠️ Break-even zone — review cost structure |
+| iROAS | < 1.0x | ❌ Destroying value — cut or restructure |
+""")
+
+    # ── Common pitfalls ───────────────────────────────────────────────────────
+    st.markdown('<p class="section-header">⚠️ Common Pitfalls & How to Avoid Them</p>', unsafe_allow_html=True)
+    pitfall_cols = st.columns(3)
+    pitfalls = [
+        ("🔴 Contamination", "Twin market accidentally exposed to your ads via social sharing, influencer content, or cross-border targeting.",
+         "Use geo-fencing, exclude Twin from all ad targeting, and monitor reach reports daily."),
+        ("🟡 External Shocks", "A news event, competitor campaign, or holiday affects one market but not the other during the test.",
+         "Document all external events. If a major shock hits the Twin, pause the test and restart."),
+        ("🟠 Too Short a Test", "Running for only 7–10 days misses the full purchase cycle and understates lift.",
+         "Minimum 21 days. For high-consideration products (finance, travel), extend to 45 days."),
+    ]
+    for col, (title, problem, solution) in zip(pitfall_cols, pitfalls):
+        col.markdown(
+            f'<div style="background:#FFF8F0;border:1px solid #FFD580;border-radius:8px;padding:14px;">'
+            f'<b>{title}</b><br><br>'
+            f'<b>Problem:</b> {problem}<br><br>'
+            f'<b>Fix:</b> {solution}</div>',
+            unsafe_allow_html=True
+        )
+
+    st.divider()
+    st.caption("Methodology: Geo-Lift / Synthetic Control · Statistical approach: CausalImpact (Bayesian structural time series) or Difference-in-Differences · Built for Media Strategy incrementality planning")
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# TAB 1 — TWIN FINDER (original content)
+# ═══════════════════════════════════════════════════════════════════════════════
+with tab_finder:
+
+    st.markdown(
+        '<div class="info-box">'
+        "<b>What is a Synthetic Twin?</b> A market whose consumer demand profile closely "
+        "mirrors your target market — making it an ideal <em>control group</em> for a "
+        "geo-lift / incrementality test. High correlation (r ≥ 0.80) = strong candidate."
+        "</div>",
+        unsafe_allow_html=True,
+    )
+
+    st.markdown(
+        '<div class="method-box">'
+        "<b>📐 Methodology:</b> This tool fetches Google Trends <em>interest by region</em> "
+        "scores for each keyword you select, builds a keyword × market demand matrix, "
+        "normalises it, and computes <b>Pearson correlation</b> between your target market "
+        "and each comparison market. Comparing across multiple keywords captures broader "
+        "consumer behaviour patterns — more robust than a single time-series comparison."
+        "</div>",
+        unsafe_allow_html=True,
+    )
+
+    if not run_btn:
+        st.markdown(
+            '<div class="warn-box">👈 Configure your inputs in the sidebar and click '
+            "<b>Find Synthetic Twin</b> to begin.</div>",
+            unsafe_allow_html=True,
+        )
+        st.stop()
+
+    # ── Validation ────────────────────────────────────────────────────────────
+    if not comparison_markets:
+        st.error("Please select at least one Comparison Market.")
+        st.stop()
+    if not keywords:
+        st.error("Please select or enter at least one keyword.")
+        st.stop()
+
+    # ── Fetch ─────────────────────────────────────────────────────────────────
+    st.markdown('<p class="section-header">📡 Fetching Google Trends Data</p>', unsafe_allow_html=True)
+    progress_bar = st.progress(0)
+    status_text  = st.empty()
+
+    score_matrix = fetch_all_keywords(keywords, timeframe, progress_bar, status_text)
+
+    if score_matrix.empty:
+        st.error(
+            "No data returned from Google Trends.\n\n"
+            "**Possible causes:**\n"
+            "- All keywords returned empty responses (try broader terms)\n"
+            "- Google Trends rate limit — wait 60 s and retry\n"
+        )
+        st.stop()
+
+    # ── Check markets ─────────────────────────────────────────────────────────
+    available_markets = [m for m in score_matrix.columns if m in [target_market] + comparison_markets]
+    missing_markets   = [m for m in [target_market] + comparison_markets if m not in score_matrix.columns]
+
+    if missing_markets:
+        st.warning(f"⚠️ No search data for: **{', '.join(missing_markets)}** — excluded from analysis.")
+
+    if target_market not in score_matrix.columns:
+        st.error(
+            f"Target market **{target_market}** has no Google Trends data for the selected keywords. "
+            "Try different keywords or a broader timeframe."
+        )
+        st.stop()
+
+    comp_available = [m for m in comparison_markets if m in score_matrix.columns]
+    if not comp_available:
+        st.error("None of the comparison markets have data. Try different markets or keywords.")
+        st.stop()
+
+    # ── Correlations ──────────────────────────────────────────────────────────
+    corr_df  = compute_correlations(score_matrix, target_market, comp_available)
+    valid    = corr_df.dropna(subset=["Correlation (r)"])
+
+    if valid.empty:
+        st.error("Could not compute correlations — insufficient data. Try adding more keywords.")
+        st.stop()
+
+    best_row   = valid.iloc[0]
+    twin       = best_row["Market"]
+    twin_r     = best_row["Correlation (r)"]
+    twin_score = best_row["Match Score (%)"]
+
+    # ── KPI row ───────────────────────────────────────────────────────────────
+    st.markdown('<p class="section-header">📊 Summary</p>', unsafe_allow_html=True)
+    c1, c2, c3, c4, c5 = st.columns(5)
+    c1.metric("🎯 Target Market",   target_market)
+    c2.metric("🏆 Synthetic Twin",  twin)
+    c3.metric("📈 Correlation (r)", f"{twin_r:.4f}")
+    c4.metric("🎯 Match Score",     f"{twin_score}%")
+    c5.metric("🔍 Keywords Used",   f"{len(score_matrix)}")
+
+    st.markdown(
+        f'<div style="text-align:center;margin:1.5rem 0;">'
+        f'<div class="twin-badge">🏆 Synthetic Twin: {twin} &nbsp;|&nbsp; Match Score: {twin_score}%</div>'
+        f"</div>",
+        unsafe_allow_html=True,
+    )
+
+    # ── Radar / Spider chart: demand profile comparison ───────────────────────
+    st.markdown('<p class="section-header">🕸️ Demand Profile — Target vs Synthetic Twin</p>', unsafe_allow_html=True)
+
+    norm_matrix = score_matrix.apply(normalize_row, axis=1)
+    kw_labels   = list(norm_matrix.index)
+
+    if target_market in norm_matrix.columns and twin in norm_matrix.columns:
+        target_vals = norm_matrix[target_market].fillna(0).tolist()
+        twin_vals   = norm_matrix[twin].fillna(0).tolist()
+
+        fig_radar = go.Figure()
+        fig_radar.add_trace(go.Scatterpolar(
+            r=target_vals + [target_vals[0]],
+            theta=kw_labels + [kw_labels[0]],
+            fill="toself",
+            name=f"🎯 {target_market} (Target)",
+            line=dict(color="#1877F2", width=2.5),
+            fillcolor="rgba(24,119,242,0.15)",
+        ))
+        fig_radar.add_trace(go.Scatterpolar(
+            r=twin_vals + [twin_vals[0]],
+            theta=kw_labels + [kw_labels[0]],
+            fill="toself",
+            name=f"🏆 {twin} (Twin)",
+            line=dict(color="#F5A623", width=2.5, dash="dot"),
+            fillcolor="rgba(245,166,35,0.15)",
+        ))
+        fig_radar.update_layout(
+            polar=dict(
+                radialaxis=dict(visible=True, range=[0, 1], tickfont=dict(size=10)),
+                angularaxis=dict(tickfont=dict(size=12)),
+            ),
+            legend=dict(orientation="h", yanchor="bottom", y=-0.2, xanchor="center", x=0.5),
+            paper_bgcolor="#FFFFFF",
+            plot_bgcolor="#FFFFFF",
+            height=420,
+            margin=dict(l=40, r=40, t=40, b=60),
+        )
+        st.plotly_chart(fig_radar, use_container_width=True)
+
+    # ── Heatmap: all markets × keywords ──────────────────────────────────────
+    with st.expander("🗺️ Full Demand Heatmap — All Markets × Keywords"):
+        all_markets_in_matrix = [target_market] + [m for m in comp_available if m != target_market]
+        heat_data = norm_matrix[
+            [m for m in all_markets_in_matrix if m in norm_matrix.columns]
+        ].fillna(0)
+
+        fig_heat = go.Figure(go.Heatmap(
+            z=heat_data.values,
+            x=list(heat_data.columns),
+            y=list(heat_data.index),
+            colorscale="Blues",
+            text=np.round(heat_data.values, 2),
+            texttemplate="%{text}",
+            hovertemplate="<b>%{y}</b> in <b>%{x}</b><br>Normalised score: %{z:.2f}<extra></extra>",
+            colorbar=dict(title="Score"),
+        ))
+        fig_heat.update_layout(
+            plot_bgcolor="#FFFFFF", paper_bgcolor="#FFFFFF",
+            font=dict(family="Segoe UI, Helvetica, Arial", size=12),
+            xaxis=dict(title="Market", tickangle=-30),
+            yaxis=dict(title="Keyword"),
+            height=max(300, len(kw_labels) * 60 + 100),
+            margin=dict(l=20, r=20, t=30, b=60),
+        )
+        st.plotly_chart(fig_heat, use_container_width=True)
+
+    # ── Bar chart: Match Scores ───────────────────────────────────────────────
+    st.markdown('<p class="section-header">🏅 Match Score by Market</p>', unsafe_allow_html=True)
+    valid_corr = corr_df.dropna(subset=["Match Score (%)"])
+    if not valid_corr.empty:
+        bar_colors = [
+            "#1877F2" if m == twin else
+            ("#42A5F5" if s >= 80 else ("#FFC107" if s >= 50 else "#EF5350"))
+            for m, s in zip(valid_corr["Market"], valid_corr["Match Score (%)"])
+        ]
+        fig_bar = go.Figure(go.Bar(
+            x=valid_corr["Market"], y=valid_corr["Match Score (%)"],
+            marker_color=bar_colors,
+            text=[f"{s}%" for s in valid_corr["Match Score (%)"]],
+            textposition="outside",
+            hovertemplate="<b>%{x}</b><br>Match Score: %{y}%<extra></extra>",
+        ))
+        fig_bar.add_hline(y=80, line_dash="dash", line_color="#28A745",
+                          annotation_text="Strong (80%)", annotation_position="top right")
+        fig_bar.add_hline(y=50, line_dash="dash", line_color="#FFC107",
+                          annotation_text="Moderate (50%)", annotation_position="top right")
+        fig_bar.update_layout(
+            plot_bgcolor="#FFFFFF", paper_bgcolor="#FFFFFF",
+            font=dict(family="Segoe UI, Helvetica, Arial", size=13, color="#1C1E21"),
+            xaxis=dict(title="Market", showgrid=False),
+            yaxis=dict(title="Match Score (%)", range=[0, 115],
+                       showgrid=True, gridcolor="#E4E6EB"),
+            height=380, margin=dict(l=20, r=20, t=30, b=20),
+        )
+        st.plotly_chart(fig_bar, use_container_width=True)
+
+    # ── Ranking table ─────────────────────────────────────────────────────────
+    st.markdown('<p class="section-header">📋 Control Market Ranking — Geo-Lift Suitability</p>', unsafe_allow_html=True)
+
+    styled = (
+        corr_df.style
+        .map(score_color, subset=["Match Score (%)"])
+        .format({
+            "Correlation (r)": lambda x: f"{x:.4f}" if pd.notna(x) else "—",
+            "Match Score (%)": lambda x: f"{x}%" if pd.notna(x) else "—",
+        })
+        .set_properties(**{"text-align": "center"})
+        .set_table_styles([
+            {"selector": "thead th",
+             "props": [("background-color", "#1877F2"), ("color", "white"),
+                       ("font-weight", "bold"), ("text-align", "center")]},
+            {"selector": "tbody tr:nth-child(1)",
+             "props": [("background-color", "#E7F3FF")]},
+        ])
+    )
+    st.dataframe(styled, use_container_width=True)
+
+    # ── Keyword score table ───────────────────────────────────────────────────
+    with st.expander("📊 Raw Keyword Interest Scores by Market"):
+        all_mkt_cols = [target_market] + comp_available
+        raw_sub = score_matrix[[m for m in all_mkt_cols if m in score_matrix.columns]]
+        def _blue_scale(val):
+            try:
+                v = float(val)
+                intensity = int(200 - v * 1.5)  # 0→200, 100→50
+                intensity = max(50, min(200, intensity))
+                return f"background-color: rgb({intensity},{intensity + 20},255); color: {'black' if intensity > 120 else 'white'}"
+            except Exception:
+                return ""
+        st.dataframe(raw_sub.style.map(_blue_scale), use_container_width=True)
+
+    # ── Interpretation guide ──────────────────────────────────────────────────
+    st.markdown('<p class="section-header">📖 How to Interpret Results</p>', unsafe_allow_html=True)
+    st.markdown("""
 | Match Score | Correlation (r) | Recommendation |
 |---|---|---|
 | ≥ 80% | ≥ 0.80 | ✅ **Strong control candidate** — proceed with geo-lift test |
@@ -558,26 +784,26 @@ st.markdown("""
 - If no strong match exists, consider a synthetic control using a weighted blend of 2–3 markets.
 """)
 
-# ── Downloads ─────────────────────────────────────────────────────────────────
-with st.expander("⬇️ Download Data"):
-    col_a, col_b = st.columns(2)
-    with col_a:
-        st.download_button(
-            "📥 Raw Score Matrix CSV",
-            data=score_matrix.to_csv().encode(),
-            file_name="raw_score_matrix.csv", mime="text/csv",
-        )
-    with col_b:
-        st.download_button(
-            "📥 Correlation Rankings CSV",
-            data=corr_df.to_csv().encode(),
-            file_name="correlation_rankings.csv", mime="text/csv",
-        )
+    # ── Downloads ─────────────────────────────────────────────────────────────
+    with st.expander("⬇️ Download Data"):
+        col_a, col_b = st.columns(2)
+        with col_a:
+            st.download_button(
+                "📥 Raw Score Matrix CSV",
+                data=score_matrix.to_csv().encode(),
+                file_name="raw_score_matrix.csv", mime="text/csv",
+            )
+        with col_b:
+            st.download_button(
+                "📥 Correlation Rankings CSV",
+                data=corr_df.to_csv().encode(),
+                file_name="correlation_rankings.csv", mime="text/csv",
+            )
 
-# ── Footer ────────────────────────────────────────────────────────────────────
-st.divider()
-st.caption(
-    "Data source: Google Trends via pytrends (public scraper — interest_by_region) · "
-    "Correlation: Pearson r · Normalisation: Min-Max per keyword · "
-    "Built for Media Strategy geo-lift test planning"
-)
+    # ── Footer ────────────────────────────────────────────────────────────────
+    st.divider()
+    st.caption(
+        "Data source: Google Trends via pytrends (public scraper — interest_by_region) · "
+        "Correlation: Pearson r · Normalisation: Min-Max per keyword · "
+        "Built for Media Strategy geo-lift test planning"
+    )
