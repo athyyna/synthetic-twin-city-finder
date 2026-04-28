@@ -527,7 +527,15 @@ st.dataframe(styled, use_container_width=True)
 with st.expander("📊 Raw Keyword Interest Scores by Market"):
     all_mkt_cols = [target_market] + comp_available
     raw_sub = score_matrix[[m for m in all_mkt_cols if m in score_matrix.columns]]
-    st.dataframe(raw_sub.style.background_gradient(cmap="Blues", axis=1), use_container_width=True)
+    def _blue_scale(val):
+        try:
+            v = float(val)
+            intensity = int(200 - v * 1.5)  # 0→200, 100→50
+            intensity = max(50, min(200, intensity))
+            return f"background-color: rgb({intensity},{intensity + 20},255); color: {'black' if intensity > 120 else 'white'}"
+        except Exception:
+            return ""
+    st.dataframe(raw_sub.style.map(_blue_scale), use_container_width=True)
 
 # ── Interpretation guide ──────────────────────────────────────────────────────
 st.markdown('<p class="section-header">📖 How to Interpret Results</p>', unsafe_allow_html=True)
